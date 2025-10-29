@@ -1,0 +1,5 @@
+{
+  "name": "AI 恋爱关系模拟器",
+  "description": "一个允许用户创建虚拟伴侣并与之互动，通过AI驱动的对话培养感情，最终走向婚姻的模拟游戏。",
+  "requestFramePermissions": []
+}

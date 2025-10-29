@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { CharacterCreation } from './components/CharacterCreation';
 import { ChatScreen } from './components/ChatScreen';
 import { WeddingScreen } from './components/WeddingScreen';
-import { generateChatResponse, generateOpeningLine } from './services/geminiService';
+import { generateChatResponse, generateOpeningLine, analyzeRelationshipFavorability } from './services/geminiService';
 import { type Character, type Partner, type Message, type InteractionMode, type GameState } from './types';
-import { RELATIONSHIP_LEVELS, FAVORABILITY_MAX } from './constants';
+import { RELATIONSHIP_LEVELS, FAVORABILITY_MAX, FAVORABILITY_MIN } from './constants';
 
 const App: React.FC = () => {
     const [gameState, setGameState] = useState<GameState>('creation');
@@ -14,6 +14,7 @@ const App: React.FC = () => {
     const [favorability, setFavorability] = useState(0);
     const [relationshipLevel, setRelationshipLevel] = useState(RELATIONSHIP_LEVELS[0].level);
     const [isLoading, setIsLoading] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState('正在开启你们的故事...');
 
     useEffect(() => {
         const newLevel = [...RELATIONSHIP_LEVELS]
@@ -22,7 +23,7 @@ const App: React.FC = () => {
 
         if (newLevel !== relationshipLevel) {
             setRelationshipLevel(newLevel);
-            if (newLevel === '未婚伴侣') {
+            if (newLevel === '未婚伴侣' && favorability >= FAVORABILITY_MAX) {
                 setTimeout(() => {
                     setGameState('wedding');
                 }, 2000); // Add a small delay before showing the wedding screen
@@ -33,10 +34,14 @@ const App: React.FC = () => {
     const handleCreationComplete = async (playerData: Character, partnerData: Partner, relationshipStory: string) => {
         setPlayer(playerData);
         setPartner(partnerData);
-        setFavorability(10); // Start with a base favorability since they have a backstory
         setIsLoading(true);
         setGameState('chat');
 
+        setLoadingMessage('正在分析你们的关系...');
+        const initialFavorability = await analyzeRelationshipFavorability(relationshipStory);
+        setFavorability(initialFavorability);
+
+        setLoadingMessage('正在生成开场白...');
         const openingLine = await generateOpeningLine(playerData, partnerData, relationshipStory);
 
         setChatHistory([
@@ -61,7 +66,7 @@ const App: React.FC = () => {
         const partnerMessage: Message = { sender: 'partner', text: aiResponse.text, timestamp: Date.now() + 1 };
         
         setChatHistory(prev => [...prev, partnerMessage]);
-        setFavorability(prev => Math.max(0, Math.min(FAVORABILITY_MAX, prev + aiResponse.favorabilityChange)));
+        setFavorability(prev => Math.max(FAVORABILITY_MIN, Math.min(FAVORABILITY_MAX, prev + aiResponse.favorabilityChange)));
         setIsLoading(false);
 
     }, [player, partner, isLoading, chatHistory, relationshipLevel, favorability]);
@@ -93,7 +98,7 @@ const App: React.FC = () => {
                            />;
                 }
                  // Show a loading screen while the opening line is being generated
-                return <div className="h-screen w-screen flex items-center justify-center bg-white"><p className="text-pink-500">正在开启你们的故事...</p></div>;
+                return <div className="h-screen w-screen flex items-center justify-center bg-white"><p className="text-pink-500 animate-pulse">{loadingMessage}</p></div>;
             case 'wedding':
                  if (player && partner) {
                     return <WeddingScreen player={player} partner={partner} onRestart={handleRestart} />;

@@ -27,6 +27,54 @@ function parseResponse(responseText: string): { text: string; favorabilityChange
     return { text: responseText, favorabilityChange: 1 };
 }
 
+export const analyzeRelationshipFavorability = async (
+    relationshipStory: string
+): Promise<number> => {
+    const prompt = `
+    Analyze the following relationship description provided by a user for a romance simulator game. 
+    Based on the sentiment, context, and implied history, provide a single integer representing the initial favorability score.
+    The score must be between -1000 (mortal enemies) and 1000 (deeply in love soulmates). A score of 0 represents a neutral stranger.
+
+    Here are some examples to guide you:
+    - Description: "我们是青梅竹马，从小一起长大，分享着无数的秘密和梦想。" -> Score: 600
+    - Description: "我们家族有世仇，我是奉命来杀他的。" -> Score: -900
+    - Description: "我们在一个下雨的街角偶然相遇，他把唯一的伞给了我。" -> Score: 150
+    - Description: "我们是竞争对手，在工作上总是针锋相对。" -> Score: -100
+    - Description: "我们是情侣" -> Score: 750
+    - Description: "血海深仇" -> Score: -950
+    - Description: "只是在咖啡店见过几次面。" -> Score: 20
+
+    Now, analyze this description: "${relationshipStory}"
+
+    Your response MUST be a single integer number and nothing else.
+    `;
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                temperature: 0.2, // Low temperature for consistent numerical output
+            }
+        });
+
+        const responseText = response.text.trim();
+        const score = parseInt(responseText, 10);
+
+        if (isNaN(score)) {
+            console.error("Gemini API returned a non-numeric favorability score:", responseText);
+            return 0; // Fallback to neutral
+        }
+
+        // Clamp the score to be within the allowed range
+        return Math.max(-1000, Math.min(1000, score));
+
+    } catch (error) {
+        console.error("Error calling Gemini API for favorability analysis:", error);
+        return 0; // Fallback to neutral on error
+    }
+};
+
 export const generateOpeningLine = async (
     player: Character,
     partner: Partner,
@@ -131,7 +179,7 @@ export const generateChatResponse = async (
 - 职业: ${player.occupation}
 - 特征: ${player.traits}
 
-你们目前的关系是: ${relationshipLevel} (好感度: ${favorability}/100)。
+你们目前的关系是: ${relationshipLevel} (好感度: ${favorability}/1000)。
 最近的对话历史:
 ${formattedHistory}
 

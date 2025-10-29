@@ -71,7 +71,7 @@ const HeartIcon: React.FC<{className?: string}> = ({ className }) => (
 
 export const CharacterCreation: React.FC<CharacterCreationProps> = ({ onComplete }) => {
     const [player, setPlayer] = useState<Character>({ name: '阿杰', gender: '男性', age: '25', occupation: '程序员', traits: '善良, 有点内向' });
-    const [partner, setPartner] = useState<Partner>({ name: '小雅', gender: '女性', age: '24', occupation: '设计师', traits: '开朗, 喜欢艺术', personality: '温柔体贴，偶尔有点小调皮', appearance: '长发及腰，有着明亮的眼睛和甜美的微笑', imageUrl: PARTNER_PORTRAITS[0] });
+    const [partner, setPartner] = useState<Partner>({ name: '小雅', gender: '女性', age: '24', occupation: '设计师', traits: '开朗, 喜欢艺术', personality: '温柔体贴，偶尔有点小调皮', appearance: '长发及腰，有着明亮的眼睛和甜美的微笑', imageUrl: getRandomItem(PARTNER_PORTRAITS) });
     const [relationshipStory, setRelationshipStory] = useState('我们是青梅竹马，从小一起长大，分享着无数的秘密和梦想。');
 
     const handleRandomize = (characterType: 'player' | 'partner') => {

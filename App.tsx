@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { CharacterCreation } from './components/CharacterCreation';
 import { ChatScreen } from './components/ChatScreen';
 import { WeddingScreen } from './components/WeddingScreen';
-import { generateChatResponse, generateOpeningLine, analyzeRelationshipFavorability } from './services/geminiService';
+import { generateChatResponse, generateOpeningAndStatus, analyzeRelationshipFavorability } from './services/geminiService';
 import { type Character, type Partner, type Message, type InteractionMode, type GameState } from './types';
 import { RELATIONSHIP_LEVELS, FAVORABILITY_MAX, FAVORABILITY_MIN } from './constants';
 
@@ -15,6 +15,8 @@ const App: React.FC = () => {
     const [relationshipLevel, setRelationshipLevel] = useState(RELATIONSHIP_LEVELS[0].level);
     const [isLoading, setIsLoading] = useState(false);
     const [loadingMessage, setLoadingMessage] = useState('正在开启你们的故事...');
+    const [statusPanel, setStatusPanel] = useState('正在生成状态...');
+    const [worldview, setWorldview] = useState('');
 
     useEffect(() => {
         const newLevel = [...RELATIONSHIP_LEVELS]
@@ -26,14 +28,15 @@ const App: React.FC = () => {
             if (newLevel === '未婚伴侣' && favorability >= FAVORABILITY_MAX) {
                 setTimeout(() => {
                     setGameState('wedding');
-                }, 2000); // Add a small delay before showing the wedding screen
+                }, 2000);
             }
         }
     }, [favorability, relationshipLevel]);
 
-    const handleCreationComplete = async (playerData: Character, partnerData: Partner, relationshipStory: string) => {
+    const handleCreationComplete = async (playerData: Character, partnerData: Partner, relationshipStory: string, worldviewData: string) => {
         setPlayer(playerData);
         setPartner(partnerData);
+        setWorldview(worldviewData);
         setIsLoading(true);
         setGameState('chat');
 
@@ -41,8 +44,8 @@ const App: React.FC = () => {
         const initialFavorability = await analyzeRelationshipFavorability(relationshipStory);
         setFavorability(initialFavorability);
 
-        setLoadingMessage('正在生成开场白...');
-        const openingLine = await generateOpeningLine(playerData, partnerData, relationshipStory);
+        setLoadingMessage('正在生成开场白和初始状态...');
+        const { openingLine, initialStatusPanel } = await generateOpeningAndStatus(playerData, partnerData, relationshipStory, initialFavorability, worldviewData);
 
         setChatHistory([
             {
@@ -51,6 +54,7 @@ const App: React.FC = () => {
                 timestamp: Date.now()
             }
         ]);
+        setStatusPanel(initialStatusPanel);
         setIsLoading(false);
     };
 
@@ -61,15 +65,16 @@ const App: React.FC = () => {
         setChatHistory(prev => [...prev, userMessage]);
         setIsLoading(true);
 
-        const aiResponse = await generateChatResponse(player, partner, chatHistory, message, mode, relationshipLevel, favorability);
+        const { text, favorabilityChange, statusPanel: newStatusPanel } = await generateChatResponse(player, partner, chatHistory, message, mode, relationshipLevel, favorability, worldview);
 
-        const partnerMessage: Message = { sender: 'partner', text: aiResponse.text, timestamp: Date.now() + 1 };
+        const partnerMessage: Message = { sender: 'partner', text, timestamp: Date.now() + 1 };
         
         setChatHistory(prev => [...prev, partnerMessage]);
-        setFavorability(prev => Math.max(FAVORABILITY_MIN, Math.min(FAVORABILITY_MAX, prev + aiResponse.favorabilityChange)));
+        setFavorability(prev => Math.max(FAVORABILITY_MIN, Math.min(FAVORABILITY_MAX, prev + favorabilityChange)));
+        setStatusPanel(newStatusPanel);
         setIsLoading(false);
 
-    }, [player, partner, isLoading, chatHistory, relationshipLevel, favorability]);
+    }, [player, partner, isLoading, chatHistory, relationshipLevel, favorability, worldview]);
 
     const handleRestart = () => {
         setGameState('creation');
@@ -79,6 +84,7 @@ const App: React.FC = () => {
         setFavorability(0);
         setRelationshipLevel(RELATIONSHIP_LEVELS[0].level);
         setIsLoading(false);
+        setWorldview('');
     };
 
     const renderContent = () => {
@@ -95,15 +101,15 @@ const App: React.FC = () => {
                                 relationshipLevel={relationshipLevel}
                                 favorability={favorability}
                                 isLoading={isLoading}
+                                statusPanel={statusPanel}
                            />;
                 }
-                 // Show a loading screen while the opening line is being generated
                 return <div className="h-screen w-screen flex items-center justify-center bg-white"><p className="text-pink-500 animate-pulse">{loadingMessage}</p></div>;
             case 'wedding':
                  if (player && partner) {
                     return <WeddingScreen player={player} partner={partner} onRestart={handleRestart} />;
                  }
-                 return null; // Should not happen
+                 return null;
             default:
                 return <div>Error: Invalid game state</div>;
         }

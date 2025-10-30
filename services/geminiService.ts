@@ -7,25 +7,30 @@ if (!process.env.API_KEY) {
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
 
-function parseResponse(responseText: string): { text: string; favorabilityChange: number } {
+function parseJsonResponse(
+    responseText: string
+): { text: string; favorabilityChange: number; statusPanel: string } {
     try {
-        const lines = responseText.trim().split('\n');
-        const lastLine = lines[lines.length - 1];
-        
-        // Check if the last line is a JSON object
-        if (lastLine.startsWith('{') && lastLine.endsWith('}')) {
-            const json = JSON.parse(lastLine);
-            const favorabilityChange = Number(json.favorability_change) || 0;
-            const text = lines.slice(0, -1).join('\n').trim();
-            return { text, favorabilityChange };
+        const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```|({[\s\S]*})/);
+        if (!jsonMatch) {
+            console.error("No JSON found in AI response", responseText);
+            return { text: responseText, favorabilityChange: 0, statusPanel: "状态解析失败" };
         }
-    } catch (error) {
-        console.error("Failed to parse AI response JSON:", error);
+        
+        const jsonString = jsonMatch[1] || jsonMatch[2];
+        const parsed = JSON.parse(jsonString);
+
+        return {
+            text: parsed.dialogue || "...",
+            favorabilityChange: Number(parsed.favorabilityChange) || 0,
+            statusPanel: parsed.statusPanel || "状态面板生成失败。"
+        };
+    } catch (e) {
+        console.error("Failed to parse AI JSON response:", e, "\nResponse text:", responseText);
+        return { text: "（抱歉，我好像有点走神了。）", favorabilityChange: 0, statusPanel: `状态解析失败: ${e}` };
     }
-    
-    // Fallback if parsing fails
-    return { text: responseText, favorabilityChange: 1 };
 }
+
 
 export const analyzeRelationshipFavorability = async (
     relationshipStory: string
@@ -54,7 +59,7 @@ export const analyzeRelationshipFavorability = async (
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
-                temperature: 0.2, // Low temperature for consistent numerical output
+                temperature: 0.2,
             }
         });
 
@@ -63,25 +68,29 @@ export const analyzeRelationshipFavorability = async (
 
         if (isNaN(score)) {
             console.error("Gemini API returned a non-numeric favorability score:", responseText);
-            return 0; // Fallback to neutral
+            return 0; 
         }
 
-        // Clamp the score to be within the allowed range
         return Math.max(-1000, Math.min(1000, score));
 
     } catch (error) {
         console.error("Error calling Gemini API for favorability analysis:", error);
-        return 0; // Fallback to neutral on error
+        return 0;
     }
 };
 
-export const generateOpeningLine = async (
+export const generateOpeningAndStatus = async (
     player: Character,
     partner: Partner,
-    relationshipStory: string
-): Promise<string> => {
+    relationshipStory: string,
+    initialFavorability: number,
+    worldview: string
+): Promise<{ openingLine: string, initialStatusPanel: string }> => {
      const prompt = `
 你正在一个恋爱关系模拟器中扮演角色。
+
+故事的世界观是: "${worldview}"。你所有的描述、行为和对话都必须严格符合这个世界观。
+
 你的名字是 ${partner.name}。
 你的角色设定:
 - 性别: ${partner.gender}
@@ -101,27 +110,57 @@ export const generateOpeningLine = async (
 你们之间的关系背景是: "${relationshipStory}"
 
 你的任务:
-根据你的角色设定和你们的关系背景，生成一句自然、符合人设的开场白来和 ${player.name} 打招呼。
-你的回复必须是纯粹的对话，不要包含任何括号内的动作、场景描述、表情或任何额外的解释。
+生成一句自然的开场白以及一个符合当前设定的初始状态面板。
+你的整个回复必须是一个完整的、有效的JSON对象，不包含任何额外的文本。
+
+JSON对象必须包含两个键: "openingLine" 和 "initialStatusPanel"。
+- "openingLine": 纯粹的对话，不要包含任何括号内的动作、场景描述、表情或任何额外的解释。
+- "initialStatusPanel": 一个多行字符串，必须严格遵循下面的模板和格式。内容需要根据你的人设、你们的关系背景以及**设定的世界观**来填充。
+
+状态面板模板 (这只是一个结构示例，内容需要你来创造):
+# 状态面板
+┌─ S C E N E ────────────┐
+│ 📍 地点: <根据世界观和关系背景推断的初始场景>
+│ 💬 氛围: <对当前环境氛围的简短描述>
+└──────────────────────────┘
+┌─ S T A T U S ────────────┐
+│ 💗 好感度: ${initialFavorability}/1000 (${relationshipStory})
+│ 🙀 情绪: <描述>
+│ 😃 表情: <一段对当前面部表情的详细文字描述>
+└──────────────────────────┘
+┌─ A P P E A R A N C E ─────┐
+│ 👚 穿着: <上身/下身/鞋子/配饰的综合描述>
+│ 🤸 姿势: <描述当前姿势>
+│ 🎇 行为: <描述当前行为>
+└──────────────────────────┘
+┌─ N O T E S ──────────────┐
+│ 📝 备注: <对角色当前状态的综合描述，包括外在表现和内在心理活动。>
+└──────────────────────────┘
 `;
 
     try {
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
-             config: {
-                // Set a lower temperature for a more consistent and focused opening line
-                temperature: 0.7, 
+            config: {
+                temperature: 0.8, 
             }
         });
-
-        const responseText = response.text.trim();
-        // Simple cleanup to ensure it's a single line of dialogue
-        return responseText.split('\n')[0];
+        
+        const responseText = response.text;
+        const jsonMatch = responseText.match(/{[\s\S]*}/);
+        if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            return {
+                openingLine: parsed.openingLine || `你好，${player.name}。`,
+                initialStatusPanel: parsed.initialStatusPanel || "未能生成初始状态。"
+            };
+        }
+        throw new Error("Invalid JSON response for opening line");
 
     } catch (error) {
-        console.error("Error calling Gemini API for opening line:", error);
-        return `你好，${player.name}。很高兴认识你。`; // Fallback
+        console.error("Error calling Gemini API for opening line and status:", error);
+        return { openingLine: `你好，${player.name}。很高兴认识你。`, initialStatusPanel: "状态面板生成失败。" };
     }
 }
 
@@ -132,12 +171,13 @@ export const generateChatResponse = async (
     newMessage: string,
     mode: InteractionMode,
     relationshipLevel: string,
-    favorability: number
-): Promise<{ text: string; favorabilityChange: number }> => {
+    favorability: number,
+    worldview: string
+): Promise<{ text: string; favorabilityChange: number; statusPanel: string }> => {
     
     const formattedHistory = history.slice(-10).map(msg => `${msg.sender === 'player' ? player.name : partner.name}: ${msg.text}`).join('\n');
 
-    const basePrompt = `
+    const prompt = `
 你正在一个恋爱关系模拟器中扮演角色。你需要参照以下内容完成互动式小说：
 
 <core_features>
@@ -163,6 +203,8 @@ export const generateChatResponse = async (
 
 现在，开始扮演你的角色。
 
+故事的世界观是: "${worldview}"。你所有的描述、行为和对话都必须严格符合这个世界观。
+
 你的名字是 ${partner.name}。
 你的角色设定:
 - 性别: ${partner.gender}
@@ -184,39 +226,66 @@ export const generateChatResponse = async (
 ${formattedHistory}
 
 ${player.name} 刚刚说: "${newMessage}"
-`;
 
-    const instructions = mode === 'chat' 
-        ? `
 ---
 你的任务:
-1.  仅以 ${partner.name} 的身份用对话进行回复。
-2.  你的回复要自然、符合人设和你需要遵守的创作手法。
-3.  不要包含任何括号内的动作、场景描述或表情。
-4.  在你的回复之后，另起一行，提供一个JSON对象来反映玩家消息对好感度的影响。JSON格式必须为：{"favorability_change": X}，其中X是-2到3之间的整数。正数表示好感度增加，负数表示减少，0表示不变。
----
-`
-        : `
----
-你的任务:
-1.  以 ${partner.name} 的身份用对话进行回复。
-2.  在回复中，使用半角括号 () 来描述你当前的神态、动作或场景，以丰富互动。
-3.  你的回复要自然、符合人设和你需要遵守的创作手法。
-4.  在你的回复之后，另起一行，提供一个JSON对象来反映玩家消息对好感度的影响。JSON格式必须为：{"favorability_change": X}，其中X是-2到3之间的整数。正数表示好感度增加，负数表示减少，0表示不变。
+1.  以 ${partner.name} 的身份，根据当前情景和对话历史进行回应。
+2.  同时，你需要生成一个详细的“状态面板”，实时追踪和描述 ${partner.name} 的状态。
+3.  你的整个回复必须是一个完整的、有效的JSON对象，不包含任何JSON之外的文本或markdown标识。
+
+JSON结构要求:
+{
+  "dialogue": "这是 ${partner.name} 的对话内容。${mode === 'interaction' ? '在这里，你可以使用半角括号 () 来描述神态、动作或场景。' : '在这里，只包含纯对话，不要有任何括号描述。'}",
+  "favorabilityChange": X,
+  "statusPanel": "这是一个多行字符串，包含了完整的状态面板文本。"
+}
+
+详细说明:
+- "dialogue": 你的对话回复。
+- "favorabilityChange": 一个整数(-5到5之间)，反映玩家消息对好感度的影响。
+- "statusPanel": 一个多行字符串，必须严格遵循下面的模板和格式。状态内容需要根据对话的进展和角色的行为进行实时更新，保持连贯性。
+
+状态面板模板:
+# 状态面板
+┌─ S C E N E ────────────┐
+│ 📍 地点: <根据对话和世界观对当前环境的详细描述>
+│ 💬 氛围: <对当前环境氛围的简短描述>
+└──────────────────────────┘
+┌─ S T A T U S ────────────┐
+│ 💗 好感度: <更新后的好感度>/1000 (${relationshipLevel})
+│ 🙀 情绪: <描述>
+│ 😃 表情: <一段对当前面部表情的详细文字描述>
+└──────────────────────────┘
+┌─ A P P E A R A N C E ─────┐
+│ 👚 穿着: <上身/下身/鞋子/配饰的综合描述>
+│ 🤸 姿势: <描述当前姿势>
+│ 🎇 行为: <描述当前行为>
+└──────────────────────────┘
+┌─ N O T E S ──────────────┐
+│ 📝 备注: <对角色当前状态的综合描述，包括外在表现和内在心理活动。>
+└──────────────────────────┘
 ---
 `;
 
     try {
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
-            contents: basePrompt + instructions,
+            contents: prompt,
+            config: {
+                temperature: 0.85
+            }
         });
 
         const responseText = response.text;
-        return parseResponse(responseText);
+        const parsed = parseJsonResponse(responseText);
+        // Recalculate the favorability for the status panel to be accurate
+        const newFavorability = Math.max(-1000, Math.min(1000, favorability + parsed.favorabilityChange));
+        parsed.statusPanel = parsed.statusPanel.replace(/<更新后的好感度>/g, newFavorability.toString());
+
+        return parsed;
 
     } catch (error) {
         console.error("Error calling Gemini API:", error);
-        return { text: "（抱歉，我好像有点走神了，你能再说一遍吗？）", favorabilityChange: 0 };
+        return { text: "（抱歉，我好像有点走神了，你能再说一遍吗？）", favorabilityChange: 0, statusPanel: "状态面板更新失败" };
     }
 };
